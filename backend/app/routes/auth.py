@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError
 from sqlalchemy.orm import Session
 
 from backend.app.db.database import SessionLocal
@@ -8,6 +10,7 @@ from backend.app.core.security import (
     hash_password,
     verify_password,
     create_access_token,
+    decode_access_token,
 )
 
 
@@ -16,6 +19,8 @@ router = APIRouter(
     tags=["Authentication"],
 )
 
+security = HTTPBearer()
+
 
 def get_db():
     db = SessionLocal()
@@ -23,6 +28,39 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
+    token = credentials.credentials
+
+    try:
+        payload = decode_access_token(token)
+        user_id = payload.get("user_id")
+
+        if user_id is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid token",
+            )
+
+    except JWTError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+        )
+
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found",
+        )
+
+    return user
 
 
 @router.post("/signup")
@@ -106,4 +144,14 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
         "message": "Login successful",
         "access_token": access_token,
         "token_type": "bearer",
+    }
+
+
+@router.get("/me")
+def get_me(current_user: User = Depends(get_current_user)):
+
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
     }
